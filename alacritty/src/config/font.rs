@@ -42,6 +42,9 @@ pub struct Font {
 
     /// Whether to use the built-in font for box drawing characters.
     pub builtin_box_drawing: bool,
+
+    /// Unicode codepoint substitutions
+    pub codepoint_substitutions: Vec<CodepointSubstitution>,
 }
 
 impl Font {
@@ -88,6 +91,7 @@ impl Default for Font {
             normal: Default::default(),
             bold: Default::default(),
             size: Default::default(),
+            codepoint_substitutions: Default::default(),
         }
     }
 }
@@ -161,5 +165,21 @@ impl<'de> Deserialize<'de> for Size {
         }
 
         deserializer.deserialize_any(NumVisitor)
+    }
+}
+
+/// Configuration for performing substitution for specific codepoints
+#[derive(ConfigDeserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CodepointSubstitution {
+    pub font: String,
+    pub codepoints: Vec<String>,
+}
+
+impl Default for CodepointSubstitution {
+    fn default() -> Self {
+        Self {
+            font: Default::default(),
+            codepoints: Default::default(),
+        }
     }
 }

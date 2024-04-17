@@ -76,11 +76,34 @@ pub struct GlyphCache {
 
     /// Whether to use the built-in font for box drawing characters.
     builtin_box_drawing: bool,
+
+    // glyph replacements
+    codepoint_substitutions: HashMap<char, FontKey>,
 }
 
 impl GlyphCache {
     pub fn new(mut rasterizer: Rasterizer, font: &Font) -> Result<GlyphCache, crossfont::Error> {
         let (regular, bold, italic, bold_italic) = Self::compute_font_keys(font, &mut rasterizer)?;
+
+        let mut codepoint_substitutions = HashMap::new();
+
+        // setup the symbol override map
+        for map in font.codepoint_substitutions.iter() {
+            let size = font.size();
+            let description = &FontDescription{
+                family: map.font.clone(),
+                style: font.normal().style.clone(),
+            };
+
+            let fontdesc = Self::make_desc(description, Slant::Normal, Weight::Normal);
+            let mapped_font = Self::load_regular_font(&mut rasterizer, &fontdesc, size)?;
+
+            for codepoint in map.codepoints.iter() {
+                let codepoint_val = u32::from_str_radix(codepoint.replace("U+", "").as_str(), 16);
+                let codepoint_char = char::from_u32(codepoint_val.unwrap());
+                codepoint_substitutions.insert(codepoint_char.unwrap(), mapped_font);
+            }
+        }
 
         // Need to load at least one glyph for the face before calling metrics.
         // The glyph requested here ('m' at the time of writing) has no special
@@ -101,6 +124,7 @@ impl GlyphCache {
             glyph_offset: font.glyph_offset,
             metrics,
             builtin_box_drawing: font.builtin_box_drawing,
+            codepoint_substitutions,
         })
     }
 
@@ -196,8 +220,16 @@ impl GlyphCache {
     where
         L: LoadGlyph,
     {
+        let mut gk = glyph_key;
+
+        // does this need a substitution?
+        if self.codepoint_substitutions.contains_key(&gk.character) {
+            let alt = self.codepoint_substitutions.get(&gk.character).unwrap();
+            gk.font_key = *alt;
+        }
+
         // Try to load glyph from cache.
-        if let Some(glyph) = self.cache.get(&glyph_key) {
+        if let Some(glyph) = self.cache.get(&gk) {
             return *glyph;
         };
 
@@ -207,21 +239,21 @@ impl GlyphCache {
             .builtin_box_drawing
             .then(|| {
                 builtin_font::builtin_glyph(
-                    glyph_key.character,
+                    gk.character,
                     &self.metrics,
                     &self.font_offset,
                     &self.glyph_offset,
                 )
             })
             .flatten()
-            .map_or_else(|| self.rasterizer.get_glyph(glyph_key), Ok);
+            .map_or_else(|| self.rasterizer.get_glyph(gk), Ok);
 
         let glyph = match rasterized {
             Ok(rasterized) => self.load_glyph(loader, rasterized),
             // Load fallback glyph.
             Err(RasterizerError::MissingGlyph(rasterized)) if show_missing => {
                 // Use `\0` as "missing" glyph to cache it only once.
-                let missing_key = GlyphKey { character: '\0', ..glyph_key };
+                let missing_key = GlyphKey { character: '\0', ..gk };
                 if let Some(glyph) = self.cache.get(&missing_key) {
                     *glyph
                 } else {
@@ -236,7 +268,7 @@ impl GlyphCache {
         };
 
         // Cache rasterized glyph.
-        *self.cache.entry(glyph_key).or_insert(glyph)
+        *self.cache.entry(gk).or_insert(glyph)
     }
 
     /// Load glyph into the atlas.
